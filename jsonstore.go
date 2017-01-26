@@ -12,7 +12,7 @@ import (
 )
 
 type JSONStore struct {
-	Data     map[string]interface{}
+	Data     map[string]string
 	location string
 	gzip     bool
 	sync.RWMutex
@@ -24,7 +24,7 @@ func (s *JSONStore) Init() {
 	s.Lock()
 	defer s.Unlock()
 	s.location = "data.json.gz"
-	s.Data = make(map[string]interface{})
+	s.Data = make(map[string]string)
 	s.gzip = true
 }
 
@@ -95,18 +95,26 @@ func (s *JSONStore) Save() error {
 
 // Set will set a key to a value, and then save go disk
 func (s *JSONStore) Set(key string, value interface{}) error {
-	s.set(key, value)
+	b, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	s.set(key, string(b))
 	s.Save()
 	return nil
 }
 
 // SetMem will set a key to a value, but not save to disk
 func (s *JSONStore) SetMem(key string, value interface{}) error {
-	s.set(key, value)
+	b, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	s.set(key, string(b))
 	return nil
 }
 
-func (s *JSONStore) set(key string, value interface{}) error {
+func (s *JSONStore) set(key string, value string) error {
 	s.Lock()
 	defer s.Unlock()
 	s.Data[key] = value
@@ -116,7 +124,7 @@ func (s *JSONStore) set(key string, value interface{}) error {
 // Get will return the value associated with a key
 // if the key contains a `*`, like `name:*`, it will a map[string]interface{}
 // where each key is a key containing `*` and its corresponding value
-func (s *JSONStore) Get(key string) (interface{}, error) {
+func (s *JSONStore) Get(key string) (string, error) {
 	if strings.Contains(key, "*") {
 		return s.getmany(key)
 	} else {
@@ -124,7 +132,7 @@ func (s *JSONStore) Get(key string) (interface{}, error) {
 	}
 }
 
-func (s *JSONStore) getmany(key string) (interface{}, error) {
+func (s *JSONStore) getmany(key string) (string, error) {
 	s.RLock()
 	defer s.RUnlock()
 	possible := []string{}
@@ -135,7 +143,7 @@ func (s *JSONStore) getmany(key string) (interface{}, error) {
 		possible = append(possible, substring)
 	}
 
-	m := make(map[string]interface{})
+	m := make(map[string]string)
 	for key := range s.Data {
 		for _, substring := range possible {
 			if strings.Contains(key, substring) {
@@ -144,20 +152,24 @@ func (s *JSONStore) getmany(key string) (interface{}, error) {
 		}
 	}
 
-	if len(m) == 0 {
-		return -1, errors.New(key + " not found")
+	bJSON, err := json.Marshal(m)
+	if err != nil {
+		return string(bJSON), err
 	}
-	return m, nil
+	if len(m) == 0 {
+		return string(bJSON), errors.New(key + " not found")
+	}
+	return string(bJSON), nil
 }
 
-func (s *JSONStore) getone(key string) (interface{}, error) {
+func (s *JSONStore) getone(key string) (string, error) {
 	s.RLock()
 	defer s.RUnlock()
 	val, ok := s.Data[key]
 	if !ok {
-		return -1, errors.New(key + " not found")
+		return "", errors.New(key + " not found")
 	}
-	return val, nil
+	return string(val), nil
 }
 
 // utils
