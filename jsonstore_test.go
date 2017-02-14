@@ -6,11 +6,14 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/boltdb/bolt"
 
+	redistest "github.com/soh335/go-test-redisserver"
 	redis "gopkg.in/redis.v5"
 )
 
@@ -39,18 +42,23 @@ func TestOpen(t *testing.T) {
 }
 
 func TestGeneral(t *testing.T) {
-	f := testFile()
-	defer os.Remove(f.Name())
+	dir, err := ioutil.TempDir("", "jsonstore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	name := filepath.Join(dir, "foo.jsonstore")
 	ks := new(JSONStore)
-	err := ks.Set("hello", "world")
+	err = ks.Set("hello", "world")
 	if err != nil {
 		t.Error(err)
 	}
-	if err = Save(ks, f.Name()); err != nil {
+	if err = Save(ks, name); err != nil {
 		t.Error(err)
 	}
 
-	ks2, _ := Open(f.Name())
+	ks2, _ := Open(name)
 	var a string
 	var b string
 	ks.Get("hello", &a)
@@ -65,8 +73,9 @@ func TestGeneral(t *testing.T) {
 		Height float64
 	}
 	ks.Set("human:1", Human{"Dante", 5.4})
-	Save(ks, "test2.json.gz")
-	ks2, _ = Open("test2.json.gz")
+	name2 := filepath.Join(dir, "foo2.jsonstore.gz")
+	Save(ks, name2)
+	ks2, _ = Open(name2)
 	var human Human
 	ks2.Get("human:1", &human)
 	if human.Height != 5.4 {
@@ -75,8 +84,6 @@ func TestGeneral(t *testing.T) {
 }
 
 func TestRegex(t *testing.T) {
-	f := testFile()
-	defer os.Remove(f.Name())
 	ks := new(JSONStore)
 	ks.Set("hello:1", "world1")
 	ks.Set("hello:2", "world2")
@@ -87,17 +94,118 @@ func TestRegex(t *testing.T) {
 	}
 }
 
-func BenchmarkGet(b *testing.B) {
-	ks := new(JSONStore)
-	err := ks.Set("human:1", Human{"Dante", 5.4})
+func BenchmarkRegex(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
 	if err != nil {
-		panic(err)
+		b.Fatal(err)
 	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	reg := regexp.MustCompile(`key-`)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var human Human
-		ks.Get("human:1", &human)
+		ks.GetAll(reg)
 	}
+}
+
+func key(n int) string {
+	return "key-" + strconv.Itoa(n)
+}
+
+func setupJsonstore(n int) (string, func(), error) {
+	dir, err := ioutil.TempDir("", "jsonstore")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+
+	filename := filepath.Join(dir, "foo.json.gz")
+	js := new(JSONStore)
+	for i := 0; i < n; i++ {
+		err := js.Set(key(i), Human{"Dante", 5.4})
+		if err != nil {
+			cleanup()
+			return "", nil, err
+		}
+	}
+	err = Save(js, filename)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return filename, cleanup, nil
+}
+
+func setupRedis(conf redistest.Config, n int) (*redis.Client, func(), error) {
+	s, err := redistest.NewServer(true, conf)
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() { s.Stop() }
+
+	c := redis.NewClient(&redis.Options{
+		Network: "unix",
+		Addr:    s.Config["unixsocket"],
+	})
+	for i := 0; i < n; i++ {
+		b, err := json.Marshal(Human{"Dante", 5.4})
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		err = c.Set(key(i), b, 0).Err()
+		if err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+	}
+	return c, cleanup, nil
+}
+
+func setupBolt(n int) (string, func(), error) {
+	dir, err := ioutil.TempDir("", "bolt")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+
+	filename := filepath.Join(dir, "bolt.db")
+	db, err := bolt.Open(filename, 0600, nil)
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	defer db.Close()
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("MyBucket"))
+		return err
+	})
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("MyBucket"))
+		for i := 0; i < n; i++ {
+			d, err := json.Marshal(Human{"Dante", 5.4})
+			if err != nil {
+				return err
+			}
+			return b.Put([]byte(key(i)), d)
+		}
+		return nil
+	})
+	if err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return filename, cleanup, nil
 }
 
 type Human struct {
@@ -105,34 +213,173 @@ type Human struct {
 	Height float64
 }
 
+func BenchmarkGet(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = ks.Set("human:1", Human{"Dante", 5.4})
+	if err != nil {
+		panic(err)
+	}
+	b.ResetTimer()
+	var human Human
+	for i := 0; i < b.N; i++ {
+		ks.Get("human:1", &human)
+	}
+}
+
+func BenchmarkParaGet(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	err = ks.Set("human:1", Human{"Dante", 5.4})
+	if err != nil {
+		panic(err)
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		var human Human
+		for pb.Next() {
+			ks.Get("human:1", &human)
+		}
+	})
+}
+
 func BenchmarkSet(b *testing.B) {
-	ks := new(JSONStore)
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
 	b.ResetTimer()
 	// set a key to any object you want
 	for i := 0; i < b.N; i++ {
 		err := ks.Set("human:1", Human{"Dante", 5.4})
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkParaSet(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		// set a key to any object you want
+		for pb.Next() {
+			err := ks.Set("human:1", Human{"Dante", 5.4})
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}
+
+func BenchmarkOpen(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := Open(name)
+		if err != nil {
+			b.Fatal(err)
 		}
 	}
 }
 
 func BenchmarkSave(b *testing.B) {
-	ks := new(JSONStore)
-	ks.Set("data", 1234)
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	js, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Save(ks, "benchmark.json.gz")
+		Save(js, name)
+	}
+}
+
+func benchmarkJSONStore(b *testing.B, size int) {
+	name, cleanup, err := setupJsonstore(size)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		js, err := Open(name)
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = js.Set("human:1", Human{"Dante", 5.4})
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = Save(js, name)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkJSONStore(b *testing.B) {
+	sizes := []int{10, 100, 1000, 10000}
+	for _, size := range sizes {
+		size := size
+		b.Run(
+			fmt.Sprintf("size%d", size),
+			func(b *testing.B) { benchmarkJSONStore(b, size) },
+		)
 	}
 }
 
 func TestRedis(t *testing.T) {
-	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
-	err := client.Set("data", 1234, 0).Err()
+	client, cleanup, err := setupRedis(nil, 0)
+	if err != nil {
+		t.Skip("redis is not installed")
+	}
+	defer cleanup()
+
+	err = client.Set("data", 1234, 0).Err()
 	if err != nil {
 		t.Errorf(err.Error())
 	}
@@ -146,29 +393,52 @@ func TestRedis(t *testing.T) {
 }
 
 func BenchmarkRedisSet(b *testing.B) {
-	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       0,  // use default DB
-	})
+	client, cleanup, err := setupRedis(nil, 1000)
+	if err != nil {
+		b.Skip("redis is not installed")
+	}
+	defer cleanup()
+
 	b.ResetTimer()
+	// set a key to any object you want
 	for i := 0; i < b.N; i++ {
 		bJSON, _ := json.Marshal(Human{"Dante", 5.4})
 		err := client.Set("human:1", bJSON, 0).Err()
 		if err != nil {
-			panic(err)
+			b.Fatal(err)
 		}
 	}
 }
 
-func BenchmarkRedisGet(b *testing.B) {
-	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // no password set
-		DB:       0,  // use default DB
+func BenchmarkRedisParaSet(b *testing.B) {
+	client, cleanup, err := setupRedis(nil, 1000)
+	if err != nil {
+		b.Skip("redis is not installed")
+	}
+	defer cleanup()
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		// set a key to any object you want
+		for pb.Next() {
+			bJSON, _ := json.Marshal(Human{"Dante", 5.4})
+			err := client.Set("human:1", bJSON, 0).Err()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
 	})
+}
+
+func BenchmarkRedisGet(b *testing.B) {
+	client, cleanup, err := setupRedis(nil, 1000)
+	if err != nil {
+		b.Skip("redis is not installed")
+	}
+	defer cleanup()
+
 	bJSON, _ := json.Marshal(Human{"Dante", 5.4})
-	err := client.Set("human:1", bJSON, 0).Err()
+	err = client.Set("human:1", bJSON, 0).Err()
 	if err != nil {
 		panic(err)
 	}
@@ -177,6 +447,62 @@ func BenchmarkRedisGet(b *testing.B) {
 		v, _ := client.Get("human:1").Result()
 		var human Human
 		json.Unmarshal([]byte(v), &human)
+	}
+}
+
+func BenchmarkRedisParaGet(b *testing.B) {
+	client, cleanup, err := setupRedis(nil, 1000)
+	if err != nil {
+		b.Skip("redis is not installed")
+	}
+	defer cleanup()
+
+	bJSON, _ := json.Marshal(Human{"Dante", 5.4})
+	err = client.Set("human:1", bJSON, 0).Err()
+	if err != nil {
+		panic(err)
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			v, _ := client.Get("human:1").Result()
+			var human Human
+			json.Unmarshal([]byte(v), &human)
+		}
+	})
+}
+
+func benchmarkRedis(b *testing.B, size int) {
+	client, cleanup, err := setupRedis(redistest.Config{
+		"appendonly": "yes",
+
+		// this option is very very slow.
+		// enable this in fairness.
+		"appendfsync": "always",
+	}, size)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		bJSON, _ := json.Marshal(Human{"Dante", 5.4})
+		err := client.Set("human:1", bJSON, 0).Err()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkRedis(b *testing.B) {
+	sizes := []int{10, 100, 1000, 10000}
+	for _, size := range sizes {
+		size := size
+		b.Run(
+			fmt.Sprintf("size%d", size),
+			func(b *testing.B) { benchmarkRedis(b, size) },
+		)
 	}
 }
 
@@ -220,8 +546,13 @@ func TestBolt(t *testing.T) {
 }
 
 func BenchmarkBoltSet(b *testing.B) {
-	defer os.Remove("my.db")
-	db, err := bolt.Open("my.db", 0600, nil)
+	name, cleanup, err := setupBolt(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	db, err := bolt.Open(name, 0600, nil)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -245,9 +576,48 @@ func BenchmarkBoltSet(b *testing.B) {
 	}
 }
 
+func BenchmarkBoltParaSet(b *testing.B) {
+	name, cleanup, err := setupBolt(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	db, err := bolt.Open(name, 0600, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("MyBucket"))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+		return nil
+	})
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			db.Update(func(tx *bolt.Tx) error {
+				b := tx.Bucket([]byte("MyBucket"))
+				bJSON, _ := json.Marshal(Human{"Dante", 5.4})
+				err := b.Put([]byte("data"), bJSON)
+				return err
+			})
+		}
+	})
+}
+
 func BenchmarkBoltGet(b *testing.B) {
-	defer os.Remove("my.db")
-	db, err := bolt.Open("my.db", 0600, nil)
+	name, cleanup, err := setupBolt(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	db, err := bolt.Open(name, 0600, nil)
+
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -275,5 +645,91 @@ func BenchmarkBoltGet(b *testing.B) {
 			json.Unmarshal([]byte(dat), &human)
 			return nil
 		})
+	}
+}
+
+func BenchmarkBoltParaGet(b *testing.B) {
+	name, cleanup, err := setupBolt(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	db, err := bolt.Open(name, 0600, nil)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+	db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("MyBucket"))
+		if err != nil {
+			return fmt.Errorf("create bucket: %s", err)
+		}
+		return nil
+	})
+	db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("MyBucket"))
+		bJSON, _ := json.Marshal(Human{"Dante", 5.4})
+		err := b.Put([]byte("data"), bJSON)
+		return err
+	})
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			db.View(func(tx *bolt.Tx) error {
+				b := tx.Bucket([]byte("MyBucket"))
+				dat := b.Get([]byte("data"))
+				var human Human
+				json.Unmarshal([]byte(dat), &human)
+				return nil
+			})
+		}
+	})
+}
+
+func benchmarkBolt(b *testing.B, size int) {
+	name, cleanup, err := setupBolt(size)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+
+	// Open is out of the loop, because another process can read changes by Sync.
+	db, err := bolt.Open(name, 0600, nil)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		err := db.Update(func(tx *bolt.Tx) error {
+			b := tx.Bucket([]byte("MyBucket"))
+			bJSON, err := json.Marshal(Human{"Dante", 5.4})
+			if err != nil {
+				return err
+			}
+			return b.Put([]byte("data"), bJSON)
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = db.Sync()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkBolt(b *testing.B) {
+	sizes := []int{10, 100, 1000, 10000}
+	for _, size := range sizes {
+		size := size
+		b.Run(
+			fmt.Sprintf("size%d", size),
+			func(b *testing.B) { benchmarkBolt(b, size) },
+		)
 	}
 }
