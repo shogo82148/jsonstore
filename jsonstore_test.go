@@ -13,6 +13,8 @@ import (
 
 	"github.com/boltdb/bolt"
 
+	"strings"
+
 	redistest "github.com/soh335/go-test-redisserver"
 	redis "gopkg.in/redis.v5"
 )
@@ -89,7 +91,9 @@ func TestRegex(t *testing.T) {
 	ks.Set("hello:2", "world2")
 	ks.Set("hello:3", "world3")
 	ks.Set("world:1", "hello1")
-	if len(ks.GetAll(regexp.MustCompile(`hello`))) != len(ks.Keys())-1 {
+	reg := regexp.MustCompile(`hello`)
+
+	if len(ks.GetAll(reg.MatchString).data) != len(ks.Keys())-1 {
 		t.Errorf("Problem getting all")
 	}
 }
@@ -105,10 +109,13 @@ func BenchmarkRegex(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	reg := regexp.MustCompile(`key-`)
+	matcher := func(key string) bool {
+		return strings.HasPrefix(key, "key-")
+	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ks.GetAll(reg)
+		ks.GetAll(matcher)
 	}
 }
 

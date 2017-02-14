@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io/ioutil"
-	"regexp"
 	"strings"
 	"sync"
 )
@@ -108,16 +107,16 @@ func (s *JSONStore) Get(key string, v interface{}) error {
 }
 
 // GetAll is like a filter with a regexp.
-func (s *JSONStore) GetAll(re *regexp.Regexp) map[string]json.RawMessage {
+func (s *JSONStore) GetAll(matcher func(key string) bool) *JSONStore {
 	s.RLock()
 	defer s.RUnlock()
 	results := make(map[string]json.RawMessage)
 	for k, v := range s.data {
-		if re.MatchString(k) {
+		if matcher == nil || matcher(k) {
 			results[k] = v
 		}
 	}
-	return results
+	return &JSONStore{data: results}
 }
 
 // Keys returns all the keys currently in map
