@@ -82,14 +82,15 @@ func Save(ks *JSONStore, filename string) (err error) {
 
 // Set saves a value at the given key.
 func (s *JSONStore) Set(key string, value interface{}) error {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
 	s.Lock()
 	defer s.Unlock()
 	if s.Data == nil {
 		s.Data = make(map[string]json.RawMessage)
-	}
-	b, err := json.Marshal(value)
-	if err != nil {
-		return err
 	}
 	s.Data[key] = json.RawMessage(b)
 	return nil
@@ -98,12 +99,12 @@ func (s *JSONStore) Set(key string, value interface{}) error {
 // Get will return the value associated with a key.
 func (s *JSONStore) Get(key string, v interface{}) error {
 	s.RLock()
-	defer s.RUnlock()
 	b, ok := s.Data[key]
+	s.RUnlock()
 	if !ok {
 		return NoSuchKeyError{key}
 	}
-	return json.Unmarshal(b, &v)
+	return json.Unmarshal(b, v)
 }
 
 // GetAll is like a filter with a regexp.
