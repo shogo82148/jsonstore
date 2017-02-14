@@ -33,10 +33,10 @@ func TestOpen(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	if len(ks.Data) != 1 {
-		t.Errorf("expected %d got %d", 1, len(ks.Data))
+	if len(ks.data) != 1 {
+		t.Errorf("expected %d got %d", 1, len(ks.data))
 	}
-	if world, ok := ks.Data["hello"]; !ok || string(world) != `world` {
+	if world, ok := ks.data["hello"]; !ok || string(world) != `world` {
 		t.Errorf("expected %s got %s", "world", world)
 	}
 }

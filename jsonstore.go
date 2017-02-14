@@ -21,7 +21,7 @@ func (err NoSuchKeyError) Error() string {
 
 // JSONStore is the basic store object.
 type JSONStore struct {
-	Data map[string]json.RawMessage
+	data map[string]json.RawMessage
 	sync.RWMutex
 }
 
@@ -50,9 +50,9 @@ func Open(filename string) (*JSONStore, error) {
 		return nil, err
 	}
 	// Save to the raw message
-	ks.Data = make(map[string]json.RawMessage)
+	ks.data = make(map[string]json.RawMessage)
 	for key := range toOpen {
-		ks.Data[key] = json.RawMessage(toOpen[key])
+		ks.data[key] = json.RawMessage(toOpen[key])
 	}
 	return ks, nil
 }
@@ -63,8 +63,8 @@ func Save(ks *JSONStore, filename string) (err error) {
 	defer ks.RUnlock()
 
 	toSave := make(map[string]string)
-	for key := range ks.Data {
-		toSave[key] = string(ks.Data[key])
+	for key := range ks.data {
+		toSave[key] = string(ks.data[key])
 	}
 	b, err := json.MarshalIndent(toSave, "", " ")
 	if err != nil {
@@ -89,17 +89,17 @@ func (s *JSONStore) Set(key string, value interface{}) error {
 
 	s.Lock()
 	defer s.Unlock()
-	if s.Data == nil {
-		s.Data = make(map[string]json.RawMessage)
+	if s.data == nil {
+		s.data = make(map[string]json.RawMessage)
 	}
-	s.Data[key] = json.RawMessage(b)
+	s.data[key] = json.RawMessage(b)
 	return nil
 }
 
 // Get will return the value associated with a key.
 func (s *JSONStore) Get(key string, v interface{}) error {
 	s.RLock()
-	b, ok := s.Data[key]
+	b, ok := s.data[key]
 	s.RUnlock()
 	if !ok {
 		return NoSuchKeyError{key}
@@ -112,7 +112,7 @@ func (s *JSONStore) GetAll(re *regexp.Regexp) map[string]json.RawMessage {
 	s.RLock()
 	defer s.RUnlock()
 	results := make(map[string]json.RawMessage)
-	for k, v := range s.Data {
+	for k, v := range s.data {
 		if re.MatchString(k) {
 			results[k] = v
 		}
@@ -124,9 +124,9 @@ func (s *JSONStore) GetAll(re *regexp.Regexp) map[string]json.RawMessage {
 func (s *JSONStore) Keys() []string {
 	s.RLock()
 	defer s.RUnlock()
-	keys := make([]string, len(s.Data))
+	keys := make([]string, len(s.data))
 	i := 0
-	for k := range s.Data {
+	for k := range s.data {
 		keys[i] = k
 		i++
 	}
@@ -137,5 +137,5 @@ func (s *JSONStore) Keys() []string {
 func (s *JSONStore) Delete(key string) {
 	s.Lock()
 	defer s.Unlock()
-	delete(s.Data, key)
+	delete(s.data, key)
 }
