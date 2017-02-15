@@ -38,7 +38,7 @@ func TestOpen(t *testing.T) {
 	if len(ks.data) != 1 {
 		t.Errorf("expected %d got %d", 1, len(ks.data))
 	}
-	if world, ok := ks.data["hello"]; !ok || string(world) != `world` {
+	if world, ok := ks.data["hello"]; !ok || string(*world) != `"world"` {
 		t.Errorf("expected %s got %s", "world", world)
 	}
 }
@@ -56,11 +56,14 @@ func TestGeneral(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	if err = Save(ks, name); err != nil {
+	if err := Save(ks, name); err != nil {
 		t.Error(err)
 	}
 
-	ks2, _ := Open(name)
+	ks2, err := Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var a string
 	var b string
 	ks.Get("hello", &a)

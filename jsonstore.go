@@ -1,10 +1,10 @@
 package jsonstore
 
 import (
-	"bytes"
 	"compress/gzip"
 	"encoding/json"
-	"io/ioutil"
+	"io"
+	"os"
 	"strings"
 	"sync"
 )
@@ -20,63 +20,57 @@ func (err NoSuchKeyError) Error() string {
 
 // JSONStore is the basic store object.
 type JSONStore struct {
-	data map[string]json.RawMessage
+	data map[string]*json.RawMessage
 	sync.RWMutex
 }
 
 // Open will load a jsonstore from a file.
 func Open(filename string) (*JSONStore, error) {
-	b, err := ioutil.ReadFile(filename)
+	// load from file
+	f, err := os.Open(filename)
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(filename, ".gz") {
-		r, err := gzip.NewReader(bytes.NewReader(b))
-		if err != nil {
-			return nil, err
-		}
-		b, err = ioutil.ReadAll(r)
-		if err != nil {
-			return nil, err
-		}
-	}
-	ks := new(JSONStore)
 
-	// First Unmarshal the strings
-	toOpen := make(map[string]string)
-	err = json.Unmarshal(b, &toOpen)
-	if err != nil {
+	// decode gzip if filename has ".gz" suffix
+	var r io.ReadCloser = f
+	if strings.HasSuffix(filename, ".gz") {
+		r, err = gzip.NewReader(f)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// decode json
+	dec := json.NewDecoder(r)
+	var data map[string]*json.RawMessage
+	if err := dec.Decode(&data); err != nil {
 		return nil, err
 	}
-	// Save to the raw message
-	ks.data = make(map[string]json.RawMessage)
-	for key := range toOpen {
-		ks.data[key] = json.RawMessage(toOpen[key])
-	}
-	return ks, nil
+	return &JSONStore{data: data}, nil
 }
 
 // Save writes the jsonstore to disk.
-func Save(ks *JSONStore, filename string) (err error) {
-	ks.RLock()
-	defer ks.RUnlock()
-
-	toSave := make(map[string]string)
-	for key := range ks.data {
-		toSave[key] = string(ks.data[key])
-	}
-	b, err := json.MarshalIndent(toSave, "", " ")
+func Save(ks *JSONStore, filename string) error {
+	f, err := os.Create(filename)
 	if err != nil {
-		return
+		return err
 	}
+	defer f.Close()
+
+	var w io.WriteCloser = f
 	if strings.HasSuffix(filename, ".gz") {
-		var b2 bytes.Buffer
-		w := gzip.NewWriter(&b2)
-		w.Write(b)
-		w.Close()
-		b = b2.Bytes()
+		w = gzip.NewWriter(f)
+		defer w.Close()
 	}
-	return ioutil.WriteFile(filename, b, 0644)
+	return ks.SaveToWriter(w)
+}
+
+// SaveToWriter writes the jsonstore to io.Writer
+func (s *JSONStore) SaveToWriter(w io.Writer) error {
+	snapshot := s.GetAll(nil)
+	enc := json.NewEncoder(w)
+	return enc.Encode(snapshot.data)
 }
 
 // Set saves a value at the given key.
@@ -89,9 +83,9 @@ func (s *JSONStore) Set(key string, value interface{}) error {
 	s.Lock()
 	defer s.Unlock()
 	if s.data == nil {
-		s.data = make(map[string]json.RawMessage)
+		s.data = make(map[string]*json.RawMessage)
 	}
-	s.data[key] = json.RawMessage(b)
+	s.data[key] = (*json.RawMessage)(&b)
 	return nil
 }
 
@@ -103,14 +97,14 @@ func (s *JSONStore) Get(key string, v interface{}) error {
 	if !ok {
 		return NoSuchKeyError{key}
 	}
-	return json.Unmarshal(b, v)
+	return json.Unmarshal(*b, v)
 }
 
 // GetAll is like a filter with a regexp.
 func (s *JSONStore) GetAll(matcher func(key string) bool) *JSONStore {
 	s.RLock()
 	defer s.RUnlock()
-	results := make(map[string]json.RawMessage)
+	results := make(map[string]*json.RawMessage)
 	for k, v := range s.data {
 		if matcher == nil || matcher(k) {
 			results[k] = v
