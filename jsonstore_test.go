@@ -337,6 +337,41 @@ func BenchmarkSave(b *testing.B) {
 	}
 }
 
+func BenchmarkSaveSet(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// run save in background
+	done := make(chan struct{}, 1)
+	go func() {
+		for {
+			Save(ks, name)
+			select {
+			case <-done:
+				return
+			default:
+			}
+		}
+	}()
+
+	b.ResetTimer()
+	// set a key to any object you want
+	for i := 0; i < b.N; i++ {
+		err := ks.Set("human:1", Human{"Dante", 5.4})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	close(done)
+}
+
 func benchmarkJSONStore(b *testing.B, size int) {
 	name, cleanup, err := setupJsonstore(size)
 	if err != nil {
