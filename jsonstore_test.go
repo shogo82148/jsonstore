@@ -86,7 +86,7 @@ func TestRegex(t *testing.T) {
 	ks.Set("world:1", "hello1")
 	reg := regexp.MustCompile(`hello`)
 
-	if len(ks.GetAll(reg.MatchString).data) != len(ks.Keys())-1 {
+	if ks.GetAll(reg.MatchString).Size() != ks.Size()-1 {
 		t.Errorf("Problem getting all")
 	}
 }
@@ -145,6 +145,55 @@ LOOP:
 	err = js.Get("human:1", &human)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAutoSave(t *testing.T) {
+	name, cleanup, err := setupJsonstore(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	getSize := func() int {
+		js, err := Open(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return js.Size()
+	}
+
+	js, err := Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size := getSize(); size != 0 {
+		t.Errorf("want 0, got %d", size)
+	}
+
+	const saveCount = 10
+	js.StartAutoSave(name, 0, saveCount)
+
+	// the count of changes does not reach `saveCount`
+	for i := 0; i < saveCount-1; i++ {
+		js.Set(key(i), Human{"Dante", 5.4})
+	}
+	time.Sleep(time.Second) // wait for sync
+	if size := getSize(); size != 0 {
+		t.Errorf("want 0, got %d", size)
+	}
+
+	// the count of changes reaches `saveCount`
+	js.Set(key(saveCount-1), Human{"Dante", 5.4})
+	time.Sleep(time.Second) // wait for sync
+	if size := getSize(); size != saveCount {
+		t.Errorf("want %d, got %d", saveCount, size)
+	}
+
+	js.Set(key(saveCount), Human{"Dante", 5.4})
+	js.StopAutoSave()
+	if size := getSize(); size != saveCount+1 {
+		t.Errorf("want %d, got %d", saveCount+1, size)
 	}
 }
 
@@ -359,6 +408,31 @@ func BenchmarkSaveSet(b *testing.B) {
 		}
 	}
 	close(done)
+}
+
+func BenchmarkAutoSaveSet(b *testing.B) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer cleanup()
+	ks, err := Open(name)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	// run save in background
+	ks.StartAutoSave(name, 100*time.Millisecond, 1000)
+	defer ks.StopAutoSave()
+
+	b.ResetTimer()
+	// set a key to any object you want
+	for i := 0; i < b.N; i++ {
+		err := ks.Set("human:1", Human{"Dante", 5.4})
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func benchmarkJSONStore(b *testing.B, size int) {
