@@ -15,6 +15,8 @@ import (
 
 	"strings"
 
+	"time"
+
 	redistest "github.com/soh335/go-test-redisserver"
 	redis "gopkg.in/redis.v5"
 )
@@ -98,6 +100,63 @@ func TestRegex(t *testing.T) {
 
 	if len(ks.GetAll(reg.MatchString).data) != len(ks.Keys())-1 {
 		t.Errorf("Problem getting all")
+	}
+}
+
+func TestSaveAndRename(t *testing.T) {
+	name, cleanup, err := setupJsonstore(1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	js, err := Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sizeBefore := fi.Size()
+
+	js.Set("human:1", Human{"Dante", 5.4})
+
+	done := make(chan struct{}, 1)
+	go func() {
+		SaveAndRename(js, name)
+		close(done)
+	}()
+
+LOOP:
+	for {
+		fi, err := os.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sizeAfter := fi.Size()
+		if sizeAfter < sizeBefore {
+			t.Errorf("the file is broken: %d -> %d", sizeBefore, sizeAfter)
+			break LOOP
+		}
+
+		select {
+		case <-done:
+			break LOOP
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	<-done
+	js, err = Open(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var human Human
+	err = js.Get("human:1", &human)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

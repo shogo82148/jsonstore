@@ -3,10 +3,12 @@ package jsonstore
 import (
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // NoSuchKeyError is thrown when calling Get with invalid key
@@ -64,6 +66,23 @@ func Save(ks *JSONStore, filename string) error {
 		defer w.Close()
 	}
 	return ks.SaveToWriter(w)
+}
+
+// SaveAndRename writes the jsonstore to disk safely.
+// First, SaveAndRename writes the jsonstore to temporary file,
+// and then rename it to filename.
+// NOTE: os.Rename renames atomic on POSIX systems, but no guarantee on other systems.
+func SaveAndRename(ks *JSONStore, filename string) error {
+	tmpfile := fmt.Sprintf("%s.tmp-%d", filename, time.Now().Unix())
+	if strings.HasSuffix(filename, ".gz") {
+		tmpfile += ".gz"
+	}
+	defer os.Remove(tmpfile)
+	err := Save(ks, tmpfile)
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmpfile, filename)
 }
 
 // SaveToWriter writes the jsonstore to io.Writer
