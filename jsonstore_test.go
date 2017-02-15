@@ -14,16 +14,11 @@ import (
 	"time"
 )
 
-func testFile() *os.File {
-	f, err := ioutil.TempFile(".", "jsonstore")
-	if err != nil {
-		panic(err)
-	}
-	return f
-}
-
 func TestOpen(t *testing.T) {
-	f := testFile()
+	f, err := ioutil.TempFile("", "jsonstore")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.Remove(f.Name())
 	ioutil.WriteFile(f.Name(), []byte(`{"hello":"world"}`), 0644)
 	ks, err := Open(f.Name())
